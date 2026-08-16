@@ -221,16 +221,10 @@ body{
 
 /* ---------- Time-lapse videos ---------- */
 .timelapse-card{padding:0; overflow:hidden; margin-bottom:26px;}
-.timelapse-list{padding:0 18px 18px; display:flex; flex-direction:column; gap:14px;}
-.timelapse-list:empty{display:none;}
-.timelapse-item{
-  background:var(--navy-950); border:1px solid var(--line-soft); border-radius:12px; overflow:hidden;
+.timelapse-frame{
+  position:relative; width:100%; aspect-ratio:16/9; background:#000; overflow:hidden;
 }
-.timelapse-item video{width:100%; display:block; aspect-ratio:16/9; background:#000;}
-.timelapse-item-label{
-  padding:9px 13px; font-family:var(--serif); font-weight:600; font-size:13px; color:var(--ink-1);
-  border-top:1px solid var(--line-soft);
-}
+.timelapse-frame video{width:100%; height:100%; display:block; background:#000; object-fit:contain;}
 .timelapse-empty{padding:26px 18px 22px; text-align:center; color:var(--ink-3);}
 .timelapse-empty .glyph{font-size:28px; margin-bottom:8px; opacity:0.6;}
 .timelapse-empty h3{font-family:var(--serif); color:var(--ink-1); font-weight:600; margin:0 0 6px; font-size:14px;}
@@ -680,13 +674,21 @@ body{
       <div class="viewer-head">
         <div>
           <h2>Time-Lapse Videos</h2>
-          <div class="sub">Auto-loaded from /assets</div>
+          <div class="sub" id="timelapseSub">Auto-loaded from /assets</div>
         </div>
         <button class="icon-btn" id="timelapseRefreshBtn" title="Check for new videos">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         </button>
       </div>
-      <div class="timelapse-list" id="timelapseList"></div>
+      <div class="timelapse-frame" id="timelapseFrame">
+        <video id="timelapseVideo" controls preload="metadata"></video>
+        <button type="button" class="hero-nav prev" id="timelapsePrev">‹</button>
+        <button type="button" class="hero-nav next" id="timelapseNext">›</button>
+      </div>
+      <div class="hero-footer" id="timelapseFooter">
+        <div class="hero-dots" id="timelapseDots"></div>
+      </div>
+      <div id="timelapseEmptyWrap"></div>
     </div>
   </section>
 
@@ -1199,6 +1201,7 @@ body{
   let aiSearchQuery = '';
   let allDocuments = [];
   let timelapseVideos = [];
+  let timelapseIndex = 0;
   let activeDocCategory = 'All';
   let allContacts = [];
   let contactEditMode = false;
@@ -2164,27 +2167,60 @@ body{
   }
 
   function renderTimelapse(){
-    const container = document.getElementById('timelapseList');
+    const frame = document.getElementById('timelapseFrame');
+    const footer = document.getElementById('timelapseFooter');
+    const video = document.getElementById('timelapseVideo');
+    const dots = document.getElementById('timelapseDots');
+    const emptyWrap = document.getElementById('timelapseEmptyWrap');
+    const sub = document.getElementById('timelapseSub');
+
     if (timelapseVideos.length === 0){
-      container.innerHTML = `<div class="timelapse-empty">
+      frame.style.display = 'none';
+      footer.style.display = 'none';
+      sub.textContent = 'Auto-loaded from /assets';
+      emptyWrap.innerHTML = `<div class="timelapse-empty">
         <div class="glyph">🎬</div>
         <h3>No time-lapse videos yet</h3>
         <p>Drop files named <code>video1.mp4</code>, <code>video2.mp4</code>… into <code>assets/</code> next to this page on your repo — they'll show up here automatically, no code changes needed.</p>
       </div>`;
       return;
     }
-    container.innerHTML = timelapseVideos.map(v => `
-      <div class="timelapse-item">
-        <video controls preload="metadata" src="${v.url}"></video>
-        <div class="timelapse-item-label">Video ${v.index}</div>
-      </div>
-    `).join('');
+
+    emptyWrap.innerHTML = '';
+    frame.style.display = '';
+    footer.style.display = '';
+
+    if (timelapseIndex >= timelapseVideos.length) timelapseIndex = 0;
+    const current = timelapseVideos[timelapseIndex];
+    if (video.dataset.currentUrl !== current.url){
+      video.pause();
+      video.src = current.url;
+      video.dataset.currentUrl = current.url;
+    }
+    sub.textContent = `Video ${current.index} · ${timelapseIndex+1} of ${timelapseVideos.length}`;
+
+    dots.innerHTML = timelapseVideos.map((v,i)=>`<div class="hero-dot ${i===timelapseIndex?'active':''}" data-idx="${i}"></div>`).join('');
+    dots.querySelectorAll('.hero-dot').forEach(d=>{
+      d.addEventListener('click', ()=>{ timelapseIndex = Number(d.dataset.idx); renderTimelapse(); });
+    });
   }
+
+  document.getElementById('timelapsePrev').addEventListener('click', ()=>{
+    if (!timelapseVideos.length) return;
+    timelapseIndex = (timelapseIndex - 1 + timelapseVideos.length) % timelapseVideos.length;
+    renderTimelapse();
+  });
+  document.getElementById('timelapseNext').addEventListener('click', ()=>{
+    if (!timelapseVideos.length) return;
+    timelapseIndex = (timelapseIndex + 1) % timelapseVideos.length;
+    renderTimelapse();
+  });
 
   document.getElementById('timelapseRefreshBtn').addEventListener('click', async (e)=>{
     const btn = e.currentTarget;
     btn.disabled = true;
     await probeTimelapseVideos();
+    timelapseIndex = 0;
     renderTimelapse();
     btn.disabled = false;
     toast(timelapseVideos.length ? `Found ${timelapseVideos.length} video${timelapseVideos.length===1?'':'s'}` : 'No videos found');
