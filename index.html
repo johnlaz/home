@@ -1144,7 +1144,7 @@ body{
         </button>
       </div>
       <div id="cameraPreview" style="display:none; margin-top:16px;">
-        <video id="videoFeed" playsinline style="width:100%; border-radius:10px; margin-bottom:12px; max-height:400px; background:var(--navy-950);"></video>
+        <video id="videoFeed" playsinline autoplay muted style="width:100%; border-radius:10px; margin-bottom:12px; max-height:400px; background:var(--navy-950);"></video>
         <div style="display:flex; gap:10px;">
           <button id="captureBtn" type="button" class="btn gold" style="flex:1;">Capture</button>
           <button id="cancelCameraBtn" type="button" class="btn" style="flex:1;">Cancel</button>
@@ -3033,18 +3033,25 @@ body{
   document.getElementById('cameraScandButton').addEventListener('click', async ()=>{
     try {
       scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
-      document.getElementById('videoFeed').srcObject = scannerStream;
+      const video = document.getElementById('videoFeed');
+      video.srcObject = scannerStream;
       document.getElementById('cameraPreview').style.display = 'block';
+      try { await video.play(); } catch (playErr){ console.error('video.play() failed:', playErr); }
     } catch (err){
+      console.error('getUserMedia failed:', err);
       toast('Camera access denied. Please enable camera permissions.');
     }
   });
 
   document.getElementById('captureBtn').addEventListener('click', async ()=>{
     const video = document.getElementById('videoFeed');
+    if (!video.videoWidth || !video.videoHeight){
+      toast('Camera still loading — give it a second and try again');
+      return;
+    }
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0);
     
