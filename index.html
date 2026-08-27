@@ -296,7 +296,7 @@ body{
 
 /* ---------- Modal ---------- */
 .overlay{
-  position:fixed; inset:0; z-index:100; background:rgba(3,6,12,0.72);
+  position:fixed; inset:0; z-index:130; background:rgba(3,6,12,0.72);
   backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
   display:flex; align-items:flex-end; justify-content:center;
   opacity:0; pointer-events:none; transition:opacity .2s;
@@ -310,7 +310,7 @@ body{
   border:1px solid var(--line); border-bottom:none;
   border-radius:20px 20px 0 0;
   transform:translateY(24px); transition:transform .25s cubic-bezier(.22,1,.36,1);
-  padding:22px 22px 28px;
+  padding:22px 22px calc(28px + env(safe-area-inset-bottom));
 }
 .overlay.open .modal{transform:translateY(0);}
 @media (min-width:720px){
@@ -426,6 +426,7 @@ body{
 .photo-viewer-overlay img{max-width:92vw; max-height:76vh; border-radius:10px; object-fit:contain;}
 .photo-viewer-actions{display:flex; gap:10px;}
 .photo-viewer-actions .btn{flex:none; padding:9px 18px;}
+#confirmDialogOverlay{z-index:180;}
 
 /* ---------- Suggestions ---------- */
 .suggestion-card{
@@ -989,6 +990,20 @@ body{
   </div>
 </div>
 
+<!-- THEMED CONFIRM / ALERT DIALOG -->
+<div class="overlay" id="confirmDialogOverlay">
+  <div class="modal" style="max-width:400px;">
+    <div class="modal-head">
+      <h3 id="confirmDialogTitle">Are you sure?</h3>
+    </div>
+    <div id="confirmDialogMessage" style="font-size:13.5px; color:var(--ink-2); line-height:1.5;"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="confirmDialogCancel">Cancel</button>
+      <button type="button" class="btn danger" id="confirmDialogOk">Delete</button>
+    </div>
+  </div>
+</div>
+
 <!-- ADD DOCUMENT MODAL -->
 <div class="overlay" id="docModalOverlay">
   <div class="modal">
@@ -1125,6 +1140,7 @@ body{
       <button class="modal-close" id="scannerModalClose">✕</button>
     </div>
     <div id="scannerContent">
+      <div id="scannerErrorBox" style="display:none; margin-bottom:14px; padding:12px 14px; background:rgba(226,104,92,0.1); border:1px solid rgba(226,104,92,0.3); border-radius:10px; color:var(--red); font-size:12.5px; line-height:1.5;"></div>
       <div class="scanner-option" style="margin-bottom:12px;">
         <button id="cameraScandButton" type="button" class="scanner-btn" style="width:100%; padding:16px; background:var(--navy-800); border:1px solid var(--line-soft); border-radius:var(--radius); text-align:left; cursor:pointer; display:flex; gap:12px; align-items:center;">
           <div style="font-size:28px;">📷</div>
@@ -1305,6 +1321,49 @@ body{
     t.classList.add('show');
     clearTimeout(toast._h);
     toast._h = setTimeout(()=> t.classList.remove('show'), 2200);
+  }
+
+  // ---------- Themed confirm/alert (replaces native confirm()/alert()/prompt()) ----------
+  function showConfirm(opts){
+    opts = opts || {};
+    const title = opts.title || 'Are you sure?';
+    const message = opts.message || '';
+    const confirmText = opts.confirmText || 'Delete';
+    const cancelText = opts.cancelText === undefined ? 'Cancel' : opts.cancelText;
+    const danger = opts.danger !== false;
+
+    return new Promise((resolve)=>{
+      const overlay = document.getElementById('confirmDialogOverlay');
+      const okBtn = document.getElementById('confirmDialogOk');
+      const cancelBtn = document.getElementById('confirmDialogCancel');
+
+      document.getElementById('confirmDialogTitle').textContent = title;
+      document.getElementById('confirmDialogMessage').textContent = message;
+      okBtn.textContent = confirmText;
+      okBtn.className = danger ? 'btn danger' : 'btn gold';
+      if (cancelText){ cancelBtn.style.display = ''; cancelBtn.textContent = cancelText; }
+      else { cancelBtn.style.display = 'none'; }
+
+      function cleanup(result){
+        overlay.classList.remove('open');
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        overlay.removeEventListener('click', onBackdrop);
+        resolve(result);
+      }
+      function onOk(){ cleanup(true); }
+      function onCancel(){ cleanup(false); }
+      function onBackdrop(e){ if (e.target === overlay) cleanup(false); }
+
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', onBackdrop);
+      overlay.classList.add('open');
+    });
+  }
+
+  function showAlert(message, title){
+    return showConfirm({ title: title || 'Notice', message, confirmText:'OK', cancelText:'', danger:false });
   }
 
   // ---------- Date / status logic ----------
@@ -1913,7 +1972,13 @@ body{
 
   document.getElementById('detailDeleteBtn').addEventListener('click', async ()=>{
     if (!currentDetailId) return;
-    if (!confirm('Delete this asset and its service history? This cannot be undone.')) return;
+    const asset = allAssets.find(a=>a.id===currentDetailId);
+    const ok = await showConfirm({
+      title: 'Delete asset?',
+      message: `Delete "${asset ? asset.name : 'this asset'}" and its full service history? This cannot be undone.`,
+      confirmText: 'Delete'
+    });
+    if (!ok) return;
     await db.serviceRecords.where('assetId').equals(currentDetailId).delete();
     await db.photos.where('assetId').equals(currentDetailId).delete();
     await db.assets.delete(currentDetailId);
@@ -2005,14 +2070,20 @@ body{
       const data = JSON.parse(text);
       if (!data.assets || !Array.isArray(data.assets)) throw new Error('Invalid backup file');
       const photoCount = (data.photos||[]).length;
-      if (!confirm(`Import ${data.assets.length} asset(s), ${(data.serviceRecords||[]).length} service record(s)${photoCount?', '+photoCount+' photo(s)':''}? This merges with existing data (matching IDs will be overwritten).`)) return;
+      const ok = await showConfirm({
+        title: 'Import backup?',
+        message: `Import ${data.assets.length} asset(s), ${(data.serviceRecords||[]).length} service record(s)${photoCount?', '+photoCount+' photo(s)':''}? This merges with existing data — matching IDs will be overwritten.`,
+        confirmText: 'Import',
+        danger: false
+      });
+      if (!ok) { e.target.value = ''; return; }
       await db.assets.bulkPut(data.assets);
       if (data.serviceRecords) await db.serviceRecords.bulkPut(data.serviceRecords);
       if (data.photos) await db.photos.bulkPut(data.photos);
       await loadAll();
       toast('Backup imported');
     } catch (err){
-      alert('Import failed: ' + err.message);
+      await showAlert('Import failed: ' + err.message, 'Import failed');
     }
     e.target.value = '';
   });
@@ -2201,7 +2272,8 @@ body{
     });
     wrap.querySelectorAll('[data-del]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
-        if (!confirm('Delete this item?')) return;
+        const ok = await showConfirm({ title:'Delete this item?', message:'This finish entry will be removed permanently.' });
+        if (!ok) return;
         await db.finishes.delete(btn.dataset.del);
         allFinishes = await db.finishes.toArray();
         renderFinishes();
@@ -2254,7 +2326,9 @@ body{
 
   document.getElementById('finishDeleteBtn').addEventListener('click', async ()=>{
     const id = document.getElementById('fin_id').value;
-    if (!id || !confirm('Delete this item?')) return;
+    if (!id) return;
+    const ok = await showConfirm({ title:'Delete this item?', message:'This finish entry will be removed permanently.' });
+    if (!ok) return;
     await db.finishes.delete(id);
     allFinishes = await db.finishes.toArray();
     closeFinishModal();
@@ -2441,7 +2515,8 @@ body{
   });
   document.getElementById('heroDeleteBtn').addEventListener('click', async ()=>{
     if (!allHeroPhotos.length) return;
-    if (!confirm('Remove this photo?')) return;
+    const ok = await showConfirm({ title:'Remove this photo?', message:'This hero photo will be removed from the gallery.' });
+    if (!ok) return;
     await db.heroPhotos.delete(allHeroPhotos[heroIndex].id);
     allHeroPhotos = await db.heroPhotos.orderBy('sortIndex').toArray();
     if (heroIndex >= allHeroPhotos.length) heroIndex = Math.max(0, allHeroPhotos.length-1);
@@ -2522,7 +2597,9 @@ body{
     });
     listEl.querySelectorAll('[data-del-doc]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
-        if (!confirm('Delete this document?')) return;
+        const doc = allDocuments.find(d=>d.id===btn.dataset.delDoc);
+        const ok = await showConfirm({ title:'Delete this document?', message: doc ? `"${doc.name}" will be removed permanently.` : 'This document will be removed permanently.' });
+        if (!ok) return;
         await db.documents.delete(btn.dataset.delDoc);
         allDocuments = await db.documents.toArray();
         renderDocuments();
@@ -2661,7 +2738,9 @@ body{
   });
   document.getElementById('contactDeleteBtn').addEventListener('click', async ()=>{
     const id = document.getElementById('ct_id').value;
-    if (!id || !confirm('Delete this contact?')) return;
+    if (!id) return;
+    const ok = await showConfirm({ title:'Delete this contact?', message:'This contact will be removed permanently.' });
+    if (!ok) return;
     await db.contacts.delete(id);
     allContacts = await db.contacts.toArray();
     closeContactModal();
@@ -2936,7 +3015,8 @@ body{
   });
   document.getElementById('photoDeleteBtn').addEventListener('click', async ()=>{
     if (!viewingPhotoId) return;
-    if (!confirm('Delete this photo?')) return;
+    const ok = await showConfirm({ title:'Delete this photo?', message:'This photo will be removed from the asset permanently.' });
+    if (!ok) return;
     await db.photos.delete(viewingPhotoId);
     allPhotos = await db.photos.toArray();
     document.getElementById('photoViewerOverlay').classList.remove('open');
@@ -3022,6 +3102,7 @@ body{
     document.getElementById('scannerContent').style.display = 'block';
     document.getElementById('cameraPreview').style.display = 'none';
     document.getElementById('scannedData').style.display = 'none';
+    document.getElementById('scannerErrorBox').style.display = 'none';
     scannedAssetData = null;
   });
 
@@ -3030,7 +3111,27 @@ body{
     if (scannerStream) { scannerStream.getTracks().forEach(t => t.stop()); scannerStream = null; }
   });
 
+  function showScannerError(html){
+    const box = document.getElementById('scannerErrorBox');
+    box.innerHTML = html;
+    box.style.display = 'block';
+  }
+  function clearScannerError(){
+    document.getElementById('scannerErrorBox').style.display = 'none';
+  }
+
   document.getElementById('cameraScandButton').addEventListener('click', async ()=>{
+    clearScannerError();
+
+    if (!window.isSecureContext){
+      showScannerError(`Camera access needs a secure connection (HTTPS). This page is currently loaded over ${location.protocol.replace(':','')} — camera won't work until it's deployed to your GitHub Pages site (or another https:// host). If a permission prompt appeared and you tapped Allow, that was likely your OS asking on the browser's behalf, not this specific page — it still can't reach the camera on an insecure connection. Use <strong>Manual Entry</strong> below in the meantime.`);
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      showScannerError(`This browser doesn't support camera access from a web page. Try Chrome or Safari, or use <strong>Manual Entry</strong> below.`);
+      return;
+    }
+
     try {
       scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
       const video = document.getElementById('videoFeed');
@@ -3038,8 +3139,19 @@ body{
       document.getElementById('cameraPreview').style.display = 'block';
       try { await video.play(); } catch (playErr){ console.error('video.play() failed:', playErr); }
     } catch (err){
-      console.error('getUserMedia failed:', err);
-      toast('Camera access denied. Please enable camera permissions.');
+      console.error('getUserMedia failed:', err.name, err.message);
+      const messages = {
+        NotAllowedError: `Camera permission was blocked. Check your browser's site settings (tap the ⓘ or lock icon in the address bar) and allow camera access for this page, then try again.`,
+        PermissionDeniedError: `Camera permission was blocked. Check your browser's site settings and allow camera access for this page, then try again.`,
+        NotFoundError: `No camera was found on this device.`,
+        DevicesNotFoundError: `No camera was found on this device.`,
+        NotReadableError: `The camera is already in use by another app or browser tab. Close it and try again.`,
+        TrackStartError: `The camera is already in use by another app or browser tab. Close it and try again.`,
+        OverconstrainedError: `No camera on this device matches the requested settings.`,
+        SecurityError: `Camera access was blocked for security reasons — this page needs to be loaded over HTTPS.`,
+      };
+      const friendly = messages[err.name] || `Camera error: ${err.name || 'Unknown'} — ${err.message || 'no further detail available'}.`;
+      showScannerError(friendly + ` You can also use <strong>Manual Entry</strong> below.`);
     }
   });
 
@@ -3184,19 +3296,9 @@ Be accurate - only extract what you can clearly read.`
   });
 
   document.getElementById('manualImportButton').addEventListener('click', ()=>{
-    const name = prompt('Appliance/Equipment name (e.g., Lennox HVAC, Kohler Toilet):');
-    if (!name) return;
-    scannedAssetData = { 
-      name: name,
-      category: 'Appliances',
-      serialNumber: null,
-      modelNumber: null,
-      manufacturerName: null,
-      manufactureDate: null
-    };
-    document.getElementById('scannedInfo').innerHTML = `<div style="font-weight:600; color:var(--ink-0); margin-bottom:8px;">${escapeHtml(name)}</div><div style="font-size:12px; color:var(--ink-2);">Manual entry — fill in details after adding</div>`;
-    document.getElementById('cameraPreview').style.display = 'none';
-    document.getElementById('scannedData').style.display = 'block';
+    scannerOverlay.classList.remove('open');
+    if (scannerStream) { scannerStream.getTracks().forEach(t => t.stop()); scannerStream = null; }
+    openAssetModal(null);
   });
 
   document.getElementById('rescanBtn').addEventListener('click', ()=>{
