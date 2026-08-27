@@ -1179,7 +1179,7 @@ body{
         <div class="glass" style="padding:16px; border-radius:10px; margin-bottom:12px;">
           <div id="scannedInfo"></div>
         </div>
-        <div style="display:flex; gap:10px;">
+        <div id="scannedActions" style="display:flex; gap:10px;">
           <button id="addScannedBtn" type="button" class="btn gold" style="flex:1;">Add Asset</button>
           <button id="rescanBtn" type="button" class="btn" style="flex:1;">Rescan</button>
         </div>
@@ -3121,6 +3121,8 @@ body{
     document.getElementById('cameraPreview').style.display = 'none';
     document.getElementById('scannedData').style.display = 'none';
     document.getElementById('scannerErrorBox').style.display = 'none';
+    document.getElementById('scannedActions').style.display = 'flex';
+    document.getElementById('addScannedBtn').style.display = '';
     scannedAssetData = null;
   });
 
@@ -3194,11 +3196,13 @@ body{
     
     if (!getGroqKey()){
       document.getElementById('scannedInfo').innerHTML = noKeyWarnHtml();
+      document.getElementById('scannedActions').style.display = 'none';
       document.getElementById('scannedData').style.display = 'block';
       return;
     }
 
-    document.getElementById('scannedData').innerHTML = '<div class="loading-wrap"><div class="spinner"></div>Reading nameplate…</div>';
+    document.getElementById('scannedInfo').innerHTML = '<div class="loading-wrap"><div class="spinner"></div>Reading nameplate…</div>';
+    document.getElementById('scannedActions').style.display = 'none';
     document.getElementById('scannedData').style.display = 'block';
 
     try {
@@ -3300,10 +3304,14 @@ Be accurate - only extract what you can clearly read.`
 
       info += `</div>`;
       document.getElementById('scannedInfo').innerHTML = info;
+      document.getElementById('scannedActions').style.display = 'flex';
+      document.getElementById('addScannedBtn').style.display = '';
 
     } catch (err){
       console.error('Scanner error:', err);
       document.getElementById('scannedInfo').innerHTML = `<div class="empty-state"><div class="glyph">⚠</div><h3>Couldn't read nameplate</h3><p>${escapeHtml(err.message)}</p><p style="font-size:12px; margin-top:8px;">Make sure the nameplate is clearly visible and well-lit.</p></div>`;
+      document.getElementById('scannedActions').style.display = 'flex';
+      document.getElementById('addScannedBtn').style.display = 'none';
     }
   });
 
