@@ -4,7 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>HomeLog</title>
-<link rel="manifest" href="data:application/json;base64,eyJuYW1lIjogIkhvbWVMb2ciLCAic2hvcnRfbmFtZSI6ICJIb21lTG9nIiwgInN0YXJ0X3VybCI6ICIuLyIsICJkaXNwbGF5IjogInN0YW5kYWxvbmUiLCAiYmFja2dyb3VuZF9jb2xvciI6ICIjMDcwZDFhIiwgInRoZW1lX2NvbG9yIjogIiMwNzBkMWEifQ==">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#070d1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HomeLog">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -606,7 +612,7 @@ body{
   </div>
   <div class="search-wrap" id="topSearchWrap">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-    <input type="text" id="searchInput" placeholder="Search assets, finishes, documents, contacts…">
+    <input type="search" id="searchInput" name="homelog-search" autocomplete="off" data-lpignore="true" data-1p-ignore data-bwignore placeholder="Search assets, finishes, documents, contacts…">
   </div>
   <div class="top-actions">
     <button class="icon-btn" id="suggestBtn" title="Smart suggestions" style="display:none;">
@@ -762,7 +768,10 @@ body{
     <div class="glass settings-section">
       <h3>Groq API Key</h3>
       <div class="field">
-        <input type="password" id="groqApiKey" placeholder="gsk_…" autocomplete="off">
+        <form autocomplete="off" onsubmit="return false;" style="margin:0;">
+          <input type="text" name="username" autocomplete="username" value="homelog-groq" style="position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;" tabindex="-1" aria-hidden="true">
+          <input type="password" id="groqApiKey" name="homelog-groq-key" placeholder="gsk_…" autocomplete="new-password" data-lpignore="true" data-1p-ignore data-bwignore>
+        </form>
         <div class="field-hint">Stored locally in this browser only, never sent anywhere but api.groq.com. Get a free key at console.groq.com/keys.</div>
       </div>
       <div class="field-hint" style="margin-bottom:10px;">Smart Suggestions, the Asset Scanner, and search assist use <strong style="color:var(--ink-1);">qwen/qwen3.6-27b</strong>. Ask Groq uses <strong style="color:var(--ink-1);">groq/compound-mini</strong> for live web search on troubleshooting and manuals.</div>
@@ -2916,6 +2925,15 @@ body{
     toast('Groq key saved');
   });
 
+  // Safety net: auto-persist the key as it's typed/pasted/autofilled, so a stray
+  // browser autofill event or accidental navigation can't wipe out unsaved work.
+  let groqKeyAutosaveTimer;
+  document.getElementById('groqApiKey').addEventListener('input', (e)=>{
+    clearTimeout(groqKeyAutosaveTimer);
+    const val = e.target.value.trim();
+    groqKeyAutosaveTimer = setTimeout(()=>{ if (val) setGroqKey(val); }, 400);
+  });
+
   function goToSettings(){
     navigateTo('settings');
     setTimeout(()=> document.getElementById('groqApiKey').focus(), 150);
@@ -3397,6 +3415,14 @@ Be accurate - only extract what you can clearly read.`
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-home'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.nav === 'home'));
   Promise.all([seedIfEmpty(), seedFinishesIfEmpty(), seedHeroPhotosIfEmpty(), seedPropertyIfEmpty(), seedContactsIfEmpty(), seedPlansDocumentIfEmpty(), probeTimelapseVideos()]).then(loadAll);
+
+  if ('serviceWorker' in navigator && window.isSecureContext){
+    window.addEventListener('load', ()=>{
+      navigator.serviceWorker.register('sw.js').catch((err)=>{
+        console.warn('Service worker registration failed (app still works without it):', err);
+      });
+    });
+  }
 
 })();
 </script>
