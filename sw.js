@@ -3,7 +3,7 @@
 // Everything else (Groq API calls, the Chief Architect embed, Google Fonts, Dexie CDN,
 // and the timelapse video probe requests) passes straight through to the network untouched.
 
-const CACHE_NAME = 'homelog-shell-v1.1';
+const CACHE_NAME = 'homelog-shell-v1.2';
 const SHELL_FILES = [
   './',
   './index.html',
