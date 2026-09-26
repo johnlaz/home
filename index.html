@@ -774,7 +774,7 @@ body{
         </form>
         <div class="field-hint">Stored locally in this browser only, never sent anywhere but api.groq.com. Get a free key at console.groq.com/keys.</div>
       </div>
-      <div class="field-hint" style="margin-bottom:10px;">Smart Suggestions and search assist use <strong style="color:var(--ink-1);" id="groqChatModelName">qwen/qwen3.6-27b</strong>. The Asset Scanner uses <strong style="color:var(--ink-1);" id="groqVisionModelName">meta-llama/llama-4-scout-17b-16e-instruct</strong> to read nameplate photos. Ask Groq uses <strong style="color:var(--ink-1);" id="groqCompoundModelName">groq/compound-mini</strong> for live web search on troubleshooting and manuals. All three are picked automatically from your account's current models whenever you save a key.</div>
+      <div class="field-hint" style="margin-bottom:10px;">Smart Suggestions and search assist use <strong style="color:var(--ink-1);" id="groqChatModelName">qwen/qwen3.6-27b</strong>. The Asset Scanner uses <strong style="color:var(--ink-1);" id="groqVisionModelName">meta-llama/llama-4-scout-17b-16e-instruct</strong> to read nameplate photos. Ask Groq uses <strong style="color:var(--ink-1);" id="groqSearchModelName">openai/gpt-oss-20b</strong> with built-in web search for troubleshooting and manuals. All three are picked automatically from your account's current models whenever you save a key.</div>
       <button type="button" class="btn gold" id="settingsSaveBtn" style="width:auto; padding:9px 20px;">Save Key</button>
     </div>
 
@@ -2926,16 +2926,19 @@ body{
   // best current model for each job. Results are cached in localStorage so
   // calls elsewhere in the app don't need to hit the network every time.
   const GROQ_CHAT_MODEL_KEY = 'home3d_groq_model_chat';
-  const GROQ_COMPOUND_MODEL_KEY = 'home3d_groq_model_compound';
+  const GROQ_SEARCH_MODEL_KEY = 'home3d_groq_model_search';
   const GROQ_VISION_MODEL_KEY = 'home3d_groq_model_vision';
   // Last-resort fallbacks, only used if a live model list can't be fetched yet
   // (e.g. before the first successful key save, or if the models endpoint fails).
   const GROQ_CHAT_MODEL_FALLBACK = 'llama-3.3-70b-versatile';
-  const GROQ_COMPOUND_MODEL_FALLBACK = 'groq/compound-mini';
+  // Groq decommissioned groq/compound and groq/compound-mini on 2026-09-21.
+  // Live web search now works by giving a GPT-OSS model the built-in
+  // browser_search tool (see refreshGroqModels), rather than via a special model.
+  const GROQ_SEARCH_MODEL_FALLBACK = 'openai/gpt-oss-20b';
   const GROQ_VISION_MODEL_FALLBACK = 'meta-llama/llama-4-scout-17b-16e-instruct';
 
   function getGroqChatModel(){ return localStorage.getItem(GROQ_CHAT_MODEL_KEY) || GROQ_CHAT_MODEL_FALLBACK; }
-  function getGroqCompoundModel(){ return localStorage.getItem(GROQ_COMPOUND_MODEL_KEY) || GROQ_COMPOUND_MODEL_FALLBACK; }
+  function getGroqSearchModel(){ return localStorage.getItem(GROQ_SEARCH_MODEL_KEY) || GROQ_SEARCH_MODEL_FALLBACK; }
   // The Asset Scanner sends a photo, so it needs a vision-capable model specifically —
   // the general chat model picked above may be text-only.
   function getGroqVisionModel(){ return localStorage.getItem(GROQ_VISION_MODEL_KEY) || GROQ_VISION_MODEL_FALLBACK; }
@@ -2972,16 +2975,17 @@ body{
       // General-purpose model for JSON extraction/suggestions: prefer whatever
       // current Qwen build Groq is hosting, fall back to a versatile Llama.
       const chatModel = pickGroqModel(ids, ['qwen', 'llama-3.3', 'llama'], ['compound', 'vision']);
-      // "Ask Groq" needs Groq's compound agent (built-in web search), so this
-      // must stay a compound/compound-mini model specifically.
-      const compoundModel = pickGroqModel(ids, ['compound-mini', 'compound']);
+      // "Ask Groq" needs live web search. Groq's old compound/compound-mini
+      // agent models are decommissioned (Sept 2026); the current approach is
+      // a GPT-OSS model called with the built-in browser_search tool instead.
+      const searchModel = pickGroqModel(ids, ['gpt-oss-20b', 'gpt-oss-120b', 'gpt-oss']);
       // The nameplate scanner sends an image, so it needs an actual vision model.
       const visionModel = pickGroqModel(ids, ['scout', 'maverick', 'vision'], ['compound']);
       if (chatModel) localStorage.setItem(GROQ_CHAT_MODEL_KEY, chatModel);
-      if (compoundModel) localStorage.setItem(GROQ_COMPOUND_MODEL_KEY, compoundModel);
+      if (searchModel) localStorage.setItem(GROQ_SEARCH_MODEL_KEY, searchModel);
       if (visionModel) localStorage.setItem(GROQ_VISION_MODEL_KEY, visionModel);
       updateGroqModelHint();
-      return { chatModel, compoundModel, visionModel };
+      return { chatModel, searchModel, visionModel };
     } catch (err){
       console.warn('Could not refresh Groq model list:', err);
       return null;
@@ -2990,10 +2994,10 @@ body{
 
   function updateGroqModelHint(){
     const chatEl = document.getElementById('groqChatModelName');
-    const compoundEl = document.getElementById('groqCompoundModelName');
+    const searchEl = document.getElementById('groqSearchModelName');
     const visionEl = document.getElementById('groqVisionModelName');
     if (chatEl) chatEl.textContent = getGroqChatModel();
-    if (compoundEl) compoundEl.textContent = getGroqCompoundModel();
+    if (searchEl) searchEl.textContent = getGroqSearchModel();
     if (visionEl) visionEl.textContent = getGroqVisionModel();
   }
 
@@ -3040,6 +3044,8 @@ body{
     const body = { model, messages, temperature: opts.temperature ?? 0.4 };
     if (opts.jsonMode) body.response_format = { type:'json_object' };
     if (model.startsWith('qwen/')) body.reasoning_effort = opts.reasoningEffort || 'none';
+    if (opts.tools) body.tools = opts.tools;
+    if (opts.toolChoice) body.tool_choice = opts.toolChoice;
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + key },
@@ -3492,10 +3498,10 @@ Be accurate - only extract what you can clearly read.`
     const assetCtx = `Asset: ${asset.name}\nCategory: ${asset.category}\nModel: ${asset.modelNumber||'unknown'}\nSerial: ${asset.serialNumber||'unknown'}\nLocation: ${asset.location||'unknown'}`;
 
     try {
-      const { text, raw } = await callGroq(getGroqCompoundModel(), [
+      const { text, raw } = await callGroq(getGroqSearchModel(), [
         { role:'system', content: sys },
         { role:'user', content: `${assetCtx}\n\nQuestion: ${question}` }
-      ], { temperature:0.3 });
+      ], { temperature:0.3, tools:[{ type:'browser_search' }], toolChoice:'required' });
 
       const tools = raw.choices?.[0]?.message?.executed_tools;
       const searched = Array.isArray(tools) && tools.length
