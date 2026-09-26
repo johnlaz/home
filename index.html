@@ -774,7 +774,7 @@ body{
         </form>
         <div class="field-hint">Stored locally in this browser only, never sent anywhere but api.groq.com. Get a free key at console.groq.com/keys.</div>
       </div>
-      <div class="field-hint" style="margin-bottom:10px;">Smart Suggestions, the Asset Scanner, and search assist use <strong style="color:var(--ink-1);">qwen/qwen3.6-27b</strong>. Ask Groq uses <strong style="color:var(--ink-1);">groq/compound-mini</strong> for live web search on troubleshooting and manuals.</div>
+      <div class="field-hint" style="margin-bottom:10px;">Smart Suggestions and search assist use <strong style="color:var(--ink-1);" id="groqChatModelName">qwen/qwen3.6-27b</strong>. The Asset Scanner uses <strong style="color:var(--ink-1);" id="groqVisionModelName">meta-llama/llama-4-scout-17b-16e-instruct</strong> to read nameplate photos. Ask Groq uses <strong style="color:var(--ink-1);" id="groqCompoundModelName">groq/compound-mini</strong> for live web search on troubleshooting and manuals. All three are picked automatically from your account's current models whenever you save a key.</div>
       <button type="button" class="btn gold" id="settingsSaveBtn" style="width:auto; padding:9px 20px;">Save Key</button>
     </div>
 
@@ -1849,7 +1849,7 @@ body{
     try {
       const sys = `You are a home maintenance expert. Given a household asset, recommend a typical recurring service interval in whole months (e.g. 3 for quarterly, 12 for annual, 60 for every 5 years). Base it on general manufacturer/industry guidance for that type of item. Respond ONLY with JSON: {"months": number, "reason": "one short sentence explaining the recommended interval"}.`;
       const user = `Asset: ${name}\nType: ${category}${model ? '\nModel: ' + model : ''}${room ? '\nLocation: ' + room : ''}`;
-      const { text } = await callGroq('qwen/qwen3.6-27b', [
+      const { text } = await callGroq(getGroqChatModel(), [
         { role:'system', content: sys },
         { role:'user', content: user }
       ], { jsonMode:true, temperature:0.2 });
@@ -2896,7 +2896,7 @@ body{
       const finishItems = allFinishes.map(r => `${r.id}: ${r.key} — ${r.value} (${r.section} > ${r.group})`);
       const items = [...assetItems, ...finishItems].join('\n');
       const sys = `You help search a home management app covering tracked assets/maintenance items and a finishes/specs reference. Given a search query and a list of items (id: description), return the ids of the items most relevant to the query, best match first, at most 10. Respond ONLY with JSON: {"matches":["id1","id2"]}. If nothing is relevant, return an empty array.`;
-      const { text } = await callGroq('qwen/qwen3.6-27b', [
+      const { text } = await callGroq(getGroqChatModel(), [
         { role:'system', content: sys },
         { role:'user', content: `Query: "${q}"\n\nItems:\n${items}` }
       ], { jsonMode:true, temperature:0.2 });
@@ -2920,9 +2920,93 @@ body{
   function getGroqKey(){ return localStorage.getItem('home3d_groq_key') || ''; }
   function setGroqKey(k){ localStorage.setItem('home3d_groq_key', k); }
 
-  document.getElementById('settingsSaveBtn').addEventListener('click', ()=>{
-    setGroqKey(document.getElementById('groqApiKey').value.trim());
-    toast('Groq key saved');
+  // ---------- Groq model auto-resolution ----------
+  // Rather than hardcoding model IDs (which Groq periodically deprecates),
+  // pull the account's live model list whenever a key is saved and pick the
+  // best current model for each job. Results are cached in localStorage so
+  // calls elsewhere in the app don't need to hit the network every time.
+  const GROQ_CHAT_MODEL_KEY = 'home3d_groq_model_chat';
+  const GROQ_COMPOUND_MODEL_KEY = 'home3d_groq_model_compound';
+  const GROQ_VISION_MODEL_KEY = 'home3d_groq_model_vision';
+  // Last-resort fallbacks, only used if a live model list can't be fetched yet
+  // (e.g. before the first successful key save, or if the models endpoint fails).
+  const GROQ_CHAT_MODEL_FALLBACK = 'llama-3.3-70b-versatile';
+  const GROQ_COMPOUND_MODEL_FALLBACK = 'groq/compound-mini';
+  const GROQ_VISION_MODEL_FALLBACK = 'meta-llama/llama-4-scout-17b-16e-instruct';
+
+  function getGroqChatModel(){ return localStorage.getItem(GROQ_CHAT_MODEL_KEY) || GROQ_CHAT_MODEL_FALLBACK; }
+  function getGroqCompoundModel(){ return localStorage.getItem(GROQ_COMPOUND_MODEL_KEY) || GROQ_COMPOUND_MODEL_FALLBACK; }
+  // The Asset Scanner sends a photo, so it needs a vision-capable model specifically —
+  // the general chat model picked above may be text-only.
+  function getGroqVisionModel(){ return localStorage.getItem(GROQ_VISION_MODEL_KEY) || GROQ_VISION_MODEL_FALLBACK; }
+
+  async function fetchGroqModelIds(key){
+    const res = await fetch('https://api.groq.com/openai/v1/models', {
+      headers: { 'Authorization': 'Bearer ' + key }
+    });
+    if (!res.ok) throw new Error('Groq models list failed: ' + res.status);
+    const data = await res.json();
+    return (data.data || [])
+      .filter(m => m.active !== false)
+      .map(m => m.id);
+  }
+
+  // Picks the best match from a live model list. `prefer` is an ordered list
+  // of substrings — the first one that matches any model id wins. Models
+  // matching anything in `exclude` are never chosen (audio/moderation/etc
+  // models that can't do chat completions).
+  function pickGroqModel(ids, prefer, exclude){
+    exclude = exclude || ['whisper','tts','guard','moderation'];
+    const usable = ids.filter(id => !exclude.some(bad => id.toLowerCase().includes(bad)));
+    for (const pat of prefer){
+      const hit = usable.find(id => id.toLowerCase().includes(pat));
+      if (hit) return hit;
+    }
+    return usable[0] || null;
+  }
+
+  async function refreshGroqModels(key){
+    try {
+      const ids = await fetchGroqModelIds(key);
+      if (!ids.length) return null;
+      // General-purpose model for JSON extraction/suggestions: prefer whatever
+      // current Qwen build Groq is hosting, fall back to a versatile Llama.
+      const chatModel = pickGroqModel(ids, ['qwen', 'llama-3.3', 'llama'], ['compound', 'vision']);
+      // "Ask Groq" needs Groq's compound agent (built-in web search), so this
+      // must stay a compound/compound-mini model specifically.
+      const compoundModel = pickGroqModel(ids, ['compound-mini', 'compound']);
+      // The nameplate scanner sends an image, so it needs an actual vision model.
+      const visionModel = pickGroqModel(ids, ['scout', 'maverick', 'vision'], ['compound']);
+      if (chatModel) localStorage.setItem(GROQ_CHAT_MODEL_KEY, chatModel);
+      if (compoundModel) localStorage.setItem(GROQ_COMPOUND_MODEL_KEY, compoundModel);
+      if (visionModel) localStorage.setItem(GROQ_VISION_MODEL_KEY, visionModel);
+      updateGroqModelHint();
+      return { chatModel, compoundModel, visionModel };
+    } catch (err){
+      console.warn('Could not refresh Groq model list:', err);
+      return null;
+    }
+  }
+
+  function updateGroqModelHint(){
+    const chatEl = document.getElementById('groqChatModelName');
+    const compoundEl = document.getElementById('groqCompoundModelName');
+    const visionEl = document.getElementById('groqVisionModelName');
+    if (chatEl) chatEl.textContent = getGroqChatModel();
+    if (compoundEl) compoundEl.textContent = getGroqCompoundModel();
+    if (visionEl) visionEl.textContent = getGroqVisionModel();
+  }
+
+  document.getElementById('settingsSaveBtn').addEventListener('click', async ()=>{
+    const key = document.getElementById('groqApiKey').value.trim();
+    setGroqKey(key);
+    if (key){
+      toast('Groq key saved — checking current models…');
+      const picked = await refreshGroqModels(key);
+      toast(picked ? 'Groq key saved' : 'Groq key saved (could not verify models)');
+    } else {
+      toast('Groq key saved');
+    }
   });
 
   // Safety net: auto-persist the key as it's typed/pasted/autofilled, so a stray
@@ -2931,13 +3015,18 @@ body{
   document.getElementById('groqApiKey').addEventListener('input', (e)=>{
     clearTimeout(groqKeyAutosaveTimer);
     const val = e.target.value.trim();
-    groqKeyAutosaveTimer = setTimeout(()=>{ if (val) setGroqKey(val); }, 400);
+    groqKeyAutosaveTimer = setTimeout(()=>{ if (val){ setGroqKey(val); refreshGroqModels(val); } }, 400);
   });
 
   function goToSettings(){
     navigateTo('settings');
     setTimeout(()=> document.getElementById('groqApiKey').focus(), 150);
+    updateGroqModelHint();
   }
+
+  // If a key is already stored (returning user), refresh the model list once
+  // on load so the app swaps out any newly-deprecated model automatically.
+  if (getGroqKey()) refreshGroqModels(getGroqKey());
 
   // ---------- Groq helper ----------
   function stripThinking(text){
@@ -3063,7 +3152,7 @@ body{
     const sys = `You are a home inventory assistant for a residential maintenance-tracking app. Given a homeowner's current list of tracked assets (each with an asset type and a room/area), identify (a) commonly-expected household items that appear to be missing entirely, and (b) complementary items for assets already present (e.g. if a washer is tracked but no dryer, or an AC unit but no thermostat). Do not suggest items already present. Respond ONLY with a JSON object: {"suggestions":[{"name":"string","category":"HVAC|Plumbing|Electrical|Appliances|Structural","reason":"short one-sentence reason"}]}. Suggest at most 6 items. If nothing meaningful is missing, return an empty array.`;
 
     try {
-      const { text } = await callGroq('qwen/qwen3.6-27b', [
+      const { text } = await callGroq(getGroqChatModel(), [
         { role:'system', content: sys },
         { role:'user', content: `Current tracked assets: ${inventory}` }
       ], { jsonMode:true, temperature:0.3 });
@@ -3211,8 +3300,7 @@ body{
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
         body: JSON.stringify({
-          model: 'qwen/qwen3.6-27b',
-          reasoning_effort: 'none',
+          model: getGroqVisionModel(),
           response_format: { type: 'json_object' },
           messages: [
             {
@@ -3404,7 +3492,7 @@ Be accurate - only extract what you can clearly read.`
     const assetCtx = `Asset: ${asset.name}\nCategory: ${asset.category}\nModel: ${asset.modelNumber||'unknown'}\nSerial: ${asset.serialNumber||'unknown'}\nLocation: ${asset.location||'unknown'}`;
 
     try {
-      const { text, raw } = await callGroq('groq/compound-mini', [
+      const { text, raw } = await callGroq(getGroqCompoundModel(), [
         { role:'system', content: sys },
         { role:'user', content: `${assetCtx}\n\nQuestion: ${question}` }
       ], { temperature:0.3 });
